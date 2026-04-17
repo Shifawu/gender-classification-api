@@ -10,7 +10,7 @@ from .models import Profile
 # Helper: CORS Response
 # ---------------------------
 def cors_response(data, status=200):
-    response = JsonResponse(data, status=status)
+    response = JsonResponse(data, status=status, safe=False)
     response["Access-Control-Allow-Origin"] = "*"
     return response
 
@@ -75,213 +75,201 @@ def classify_name(request):
 
 
 # ---------------------------
-# STAGE 1 — POST /api/profiles
+# STAGE 1 — PROFILES (GET + POST)
 # ---------------------------
 @csrf_exempt
-def create_profile(request):
-    if request.method != "POST":
-        return cors_response({
-            "status": "error",
-            "message": "Method not allowed"
-        }, status=405)
+def profiles(request):
 
-    try:
-        body = json.loads(request.body)
-        name = body.get("name")
-    except:
-        return cors_response({
-            "status": "error",
-            "message": "Invalid JSON"
-        }, status=400)
-
-    if not name:
-        return cors_response({
-            "status": "error",
-            "message": "Name is required"
-        }, status=400)
-
-    name = name.lower()
-
-    # Check duplicate
-    existing = Profile.objects.filter(name=name).first()
-    if existing:
-        return cors_response({
-            "status": "success",
-            "message": "Profile already exists",
-            "data": {
-                "id": str(existing.id),
-                "name": existing.name,
-                "gender": existing.gender,
-                "gender_probability": existing.gender_probability,
-                "sample_size": existing.sample_size,
-                "age": existing.age,
-                "age_group": existing.age_group,
-                "country_id": existing.country_id,
-                "country_probability": existing.country_probability,
-                "created_at": existing.created_at.isoformat() + "Z"
-            }
-        })
-
-    try:
-        gender_res = requests.get(f"https://api.genderize.io?name={name}").json()
-        age_res = requests.get(f"https://api.agify.io?name={name}").json()
-        nation_res = requests.get(f"https://api.nationalize.io?name={name}").json()
-
-        # Edge cases
-        if gender_res.get("gender") is None or gender_res.get("count") == 0:
+    # ======================
+    # POST → CREATE PROFILE
+    # ======================
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body)
+            name = body.get("name")
+        except:
             return cors_response({
                 "status": "error",
-                "message": "Genderize returned an invalid response"
-            }, status=502)
+                "message": "Invalid JSON"
+            }, status=400)
 
-        if age_res.get("age") is None:
+        if not name:
             return cors_response({
                 "status": "error",
-                "message": "Agify returned an invalid response"
-            }, status=502)
+                "message": "Name is required"
+            }, status=400)
 
-        countries = nation_res.get("country")
-        if not countries:
+        name = name.lower()
+
+        # Check duplicate
+        existing = Profile.objects.filter(name=name).first()
+        if existing:
+            return cors_response({
+                "status": "success",
+                "message": "Profile already exists",
+                "data": {
+                    "id": str(existing.id),
+                    "name": existing.name,
+                    "gender": existing.gender,
+                    "gender_probability": existing.gender_probability,
+                    "sample_size": existing.sample_size,
+                    "age": existing.age,
+                    "age_group": existing.age_group,
+                    "country_id": existing.country_id,
+                    "country_probability": existing.country_probability,
+                    "created_at": existing.created_at.isoformat() + "Z"
+                }
+            })
+
+        try:
+            gender_res = requests.get(f"https://api.genderize.io?name={name}").json()
+            age_res = requests.get(f"https://api.agify.io?name={name}").json()
+            nation_res = requests.get(f"https://api.nationalize.io?name={name}").json()
+
+            # Edge cases
+            if gender_res.get("gender") is None or gender_res.get("count") == 0:
+                return cors_response({
+                    "status": "error",
+                    "message": "Genderize returned an invalid response"
+                }, status=502)
+
+            if age_res.get("age") is None:
+                return cors_response({
+                    "status": "error",
+                    "message": "Agify returned an invalid response"
+                }, status=502)
+
+            countries = nation_res.get("country")
+            if not countries:
+                return cors_response({
+                    "status": "error",
+                    "message": "Nationalize returned an invalid response"
+                }, status=502)
+
+            # Process data
+            age = age_res["age"]
+
+            if age <= 12:
+                age_group = "child"
+            elif age <= 19:
+                age_group = "teenager"
+            elif age <= 59:
+                age_group = "adult"
+            else:
+                age_group = "senior"
+
+            top_country = max(countries, key=lambda x: x["probability"])
+
+            profile = Profile.objects.create(
+                name=name,
+                gender=gender_res["gender"],
+                gender_probability=gender_res["probability"],
+                sample_size=gender_res["count"],
+                age=age,
+                age_group=age_group,
+                country_id=top_country["country_id"],
+                country_probability=top_country["probability"]
+            )
+
+            return cors_response({
+                "status": "success",
+                "data": {
+                    "id": str(profile.id),
+                    "name": profile.name,
+                    "gender": profile.gender,
+                    "gender_probability": profile.gender_probability,
+                    "sample_size": profile.sample_size,
+                    "age": profile.age,
+                    "age_group": profile.age_group,
+                    "country_id": profile.country_id,
+                    "country_probability": profile.country_probability,
+                    "created_at": profile.created_at.isoformat() + "Z"
+                }
+            }, status=201)
+
+        except:
             return cors_response({
                 "status": "error",
-                "message": "Nationalize returned an invalid response"
+                "message": "External API request failed"
             }, status=502)
 
-        # Process data
-        gender = gender_res["gender"]
-        gender_probability = gender_res["probability"]
-        sample_size = gender_res["count"]
+    # ======================
+    # GET → LIST + FILTER
+    # ======================
+    elif request.method == "GET":
+        profiles = Profile.objects.all()
 
-        age = age_res["age"]
+        gender = request.GET.get("gender")
+        country_id = request.GET.get("country_id")
+        age_group = request.GET.get("age_group")
 
-        if age <= 12:
-            age_group = "child"
-        elif age <= 19:
-            age_group = "teenager"
-        elif age <= 59:
-            age_group = "adult"
-        else:
-            age_group = "senior"
+        if gender:
+            profiles = profiles.filter(gender__iexact=gender)
 
-        top_country = max(countries, key=lambda x: x["probability"])
-        country_id = top_country["country_id"]
-        country_probability = top_country["probability"]
+        if country_id:
+            profiles = profiles.filter(country_id__iexact=country_id)
 
-        # Save
-        profile = Profile.objects.create(
-            name=name,
-            gender=gender,
-            gender_probability=gender_probability,
-            sample_size=sample_size,
-            age=age,
-            age_group=age_group,
-            country_id=country_id,
-            country_probability=country_probability
-        )
+        if age_group:
+            profiles = profiles.filter(age_group__iexact=age_group)
+
+        data = [
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "gender": p.gender,
+                "age": p.age,
+                "age_group": p.age_group,
+                "country_id": p.country_id
+            }
+            for p in profiles
+        ]
 
         return cors_response({
             "status": "success",
-            "data": {
-                "id": str(profile.id),
-                "name": profile.name,
-                "gender": profile.gender,
-                "gender_probability": profile.gender_probability,
-                "sample_size": profile.sample_size,
-                "age": profile.age,
-                "age_group": profile.age_group,
-                "country_id": profile.country_id,
-                "country_probability": profile.country_probability,
-                "created_at": profile.created_at.isoformat() + "Z"
-            }
-        }, status=201)
-
-    except requests.exceptions.RequestException:
-        return cors_response({
-            "status": "error",
-            "message": "External API request failed"
-        }, status=502)
-
-
-# ---------------------------
-# STAGE 1 — GET SINGLE
-# ---------------------------
-def get_profile(request, id):
-    try:
-        profile = Profile.objects.get(id=id)
-
-        return cors_response({
-            "status": "success",
-            "data": {
-                "id": str(profile.id),
-                "name": profile.name,
-                "gender": profile.gender,
-                "gender_probability": profile.gender_probability,
-                "sample_size": profile.sample_size,
-                "age": profile.age,
-                "age_group": profile.age_group,
-                "country_id": profile.country_id,
-                "country_probability": profile.country_probability,
-                "created_at": profile.created_at.isoformat() + "Z"
-            }
-        })
-
-    except Profile.DoesNotExist:
-        return cors_response({
-            "status": "error",
-            "message": "Profile not found"
-        }, status=404)
-
-
-# ---------------------------
-# STAGE 1 — GET ALL + FILTER
-# ---------------------------
-def get_all_profiles(request):
-    profiles = Profile.objects.all()
-
-    gender = request.GET.get("gender")
-    country_id = request.GET.get("country_id")
-    age_group = request.GET.get("age_group")
-
-    if gender:
-        profiles = profiles.filter(gender__iexact=gender)
-
-    if country_id:
-        profiles = profiles.filter(country_id__iexact=country_id)
-
-    if age_group:
-        profiles = profiles.filter(age_group__iexact=age_group)
-
-    data = []
-
-    for profile in profiles:
-        data.append({
-            "id": str(profile.id),
-            "name": profile.name,
-            "gender": profile.gender,
-            "age": profile.age,
-            "age_group": profile.age_group,
-            "country_id": profile.country_id
+            "count": len(data),
+            "data": data
         })
 
     return cors_response({
-        "status": "success",
-        "count": len(data),
-        "data": data
-    })
+        "status": "error",
+        "message": "Method not allowed"
+    }, status=405)
 
-@csrf_exempt    
-def delete_profile(request, id):
-    if request.method != "DELETE":
-        return cors_response({
-            "status": "error",
-            "message": "Method not allowed"
-        }, status=405)
 
+# ---------------------------
+# STAGE 1 — SINGLE (GET + DELETE)
+# ---------------------------
+@csrf_exempt
+def profile_detail(request, id):
     try:
         profile = Profile.objects.get(id=id)
-        profile.delete()
 
-        return cors_response({}, status=204)
+        if request.method == "GET":
+            return cors_response({
+                "status": "success",
+                "data": {
+                    "id": str(profile.id),
+                    "name": profile.name,
+                    "gender": profile.gender,
+                    "gender_probability": profile.gender_probability,
+                    "sample_size": profile.sample_size,
+                    "age": profile.age,
+                    "age_group": profile.age_group,
+                    "country_id": profile.country_id,
+                    "country_probability": profile.country_probability,
+                    "created_at": profile.created_at.isoformat() + "Z"
+                }
+            })
+
+        elif request.method == "DELETE":
+            profile.delete()
+            return cors_response({}, status=204)
+
+        else:
+            return cors_response({
+                "status": "error",
+                "message": "Method not allowed"
+            }, status=405)
 
     except Profile.DoesNotExist:
         return cors_response({
