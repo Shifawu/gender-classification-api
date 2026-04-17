@@ -12,7 +12,7 @@ urlpatterns = [
 
     # Stage 1
     path('profiles', create_profile),            # POST
-    path('profiles/', get_all_profiles),         # GET all
+    path('profiles', get_all_profiles),         # GET all
     path('profiles/<uuid:id>', get_profile),     # GET one
     path('profiles/<uuid:id>/delete', delete_profile),  # DELETE
 ]

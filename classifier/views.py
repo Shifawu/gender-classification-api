@@ -269,7 +269,7 @@ def get_all_profiles(request):
         "data": data
     })
 
-    
+@csrf_exempt    
 def delete_profile(request, id):
     if request.method != "DELETE":
         return cors_response({
