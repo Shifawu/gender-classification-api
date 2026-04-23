@@ -7,6 +7,8 @@ urlpatterns = [
 
     path("profiles/search", search_profiles),
 
+    path("seed", trigger_seed),
+
     path("profiles/<uuid:id>", get_profile),
     path("profiles/<uuid:id>/delete", delete_profile),
 ]

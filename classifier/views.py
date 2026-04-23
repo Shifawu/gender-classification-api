@@ -332,3 +332,12 @@ def search_profiles(request):
         "total": total,
         "data": data
     })
+
+from django.core.management import call_command
+
+def trigger_seed(request):
+    call_command("seed_profiles")
+    return cors_response({
+        "status": "success",
+        "message": "Seeding done"
+    })
