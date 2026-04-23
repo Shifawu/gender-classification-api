@@ -1,9 +1,13 @@
 from django.urls import path
-from .views import classify_name, profiles, profile_detail
+from .views import profiles_handler, get_profile, delete_profile, search_profiles
 
 urlpatterns = [
-    path('classify', classify_name),
+    # path("profiles", create_profile),
+    # path("profiles/", get_all_profiles),
+    path("profiles", profiles_handler),
 
-    path('profiles', profiles),                 # GET + POST
-    path('profiles/<uuid:id>', profile_detail), # GET + DELETE
+    path("profiles/search", search_profiles),
+
+    path("profiles/<uuid:id>", get_profile),
+    path("profiles/<uuid:id>/delete", delete_profile),
 ]

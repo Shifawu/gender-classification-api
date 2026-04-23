@@ -99,6 +99,45 @@ GET /api/classify?name={name}
 
 ---
 
+## Natural Language Parsing
+
+  I implemented a rule-based parser for the /api/profiles/search endpoint.
+
+  The system converts plain English queries into database filters using keyword matching.
+
+## Supported Keywords
+### Gender
+* "male" → gender=male
+* "female" → gender=female
+
+### Age Keywords
+* "young" → age between 16 and 24
+* "child" → age_group=child
+* "teenager" → age_group=teenager
+* "adult" → age_group=adult
+* "senior" → age_group=senior
+
+### Age Conditions
+* "above X" → age >= X
+
+### Country Mapping
+* nigeria → NG
+* kenya → KE
+* ghana → GH
+* angola → AO
+* usa → US
+
+The parser scans the query string and applies filters based on detected keywords.
+
+## Limitations
+* Only supports predefined keywords
+* Does not handle complex grammar
+* Cannot process multiple conditions like “between 20 and 30”
+* Limited country mapping
+* Does not understand synonyms beyond defined rules
+
+---
+
 ##  Tech Stack
 
 * Python
