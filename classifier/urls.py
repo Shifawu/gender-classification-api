@@ -1,10 +1,9 @@
 from django.urls import path
-from .views import profiles_handler, get_profile, delete_profile, search_profiles
+from .views import *
 
 urlpatterns = [
-    # path("profiles", create_profile),
-    # path("profiles/", get_all_profiles),
     path("profiles", profiles_handler),
+    path("profiles/", profiles_handler),
 
     path("profiles/search", search_profiles),
 
