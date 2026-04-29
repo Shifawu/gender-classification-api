@@ -1,202 +1,227 @@
-# Gender Classification API
+# 🧠 Profile Intelligence System
 
-A simple backend API built with Django that classifies a given name by gender using the Genderize.io API and returns a processed, structured response.
-
----
-
-## Live Endpoint
-
-GET /api/classify?name={name}
-
-### Example:
-
-```
-/api/classify?name=john
-```
+A full-stack system that generates, stores, and queries demographic profiles using external APIs, JWT authentication, role-based access control, and natural language parsing.
 
 ---
 
-## Response Format
+## 🚀 Live Links
 
-### Success Response (200 OK)
+* **Backend API:** https://gender-classification-api-production.up.railway.app/
+* **Web Portal:** https://web-portal-ashy-psi.vercel.app/
+* **CLI Repository:** https://github.com/Shifawu/profile-cli.git
+* **Backend Repository:** https://github.com/Shifawu/gender-classification-api.git
+* **Web Portal Repository:** https://github.com/Shifawu/web-portal.git
 
-```json
-{
-  "status": "success",
-  "data": {
-    "name": "john",
-    "gender": "male",
-    "probability": 0.99,
-    "sample_size": 1234,
-    "is_confident": true,
-    "processed_at": "2026-04-14T12:00:00Z"
-  }
-}
+---
+
+## 🏗️ System Architecture
+
+The system is composed of three main components:
+
+### 1. Backend (Django API)
+
+* Handles authentication (JWT + OAuth)
+* Processes external API data
+* Stores profiles in database
+* Exposes REST endpoints
+
+### 2. CLI Tool (Python)
+
+* Allows terminal interaction with the API
+* Supports fetching and creating profiles
+
+### 3. Web Portal (HTML + JS)
+
+* Simple UI to interact with backend
+* Performs login, create, and fetch operations
+
+---
+
+### 🔄 Data Flow
+
+User → (CLI / Web) → Backend API → External APIs → Database → Response
+
+External APIs used:
+
+* Genderize API
+* Agify API
+* Nationalize API
+
+---
+
+## 🔐 Authentication Flow
+
+### JWT Authentication
+
+1. User logs in via `/api/auth/test-login/`
+2. Backend generates JWT access token
+3. Token is stored on client (CLI or browser)
+4. Token is sent in request headers:
+
+```
+Authorization: Bearer <access_token>
+```
+
+5. Backend validates token before granting access
+
+---
+
+## 🔑 Token Handling Approach
+
+* JWT tokens are generated using PyJWT
+
+* Token payload includes:
+
+  * `user_id`
+  * `role` (admin / analyst)
+  * `exp` (expiration time)
+
+* Access token expires after **1 hour**
+
+* Token validation is handled in every protected endpoint
+
+---
+
+## 👮 Role Enforcement Logic
+
+The system supports two roles:
+
+### Admin
+
+* Can create profiles
+* Can delete profiles
+* Full access to system
+
+### Analyst
+
+* Can view profiles
+* Can search profiles
+* Cannot create or delete
+
+### Enforcement
+
+Role checks are done in backend:
+
+```python
+if not require_admin(user):
+    return error
 ```
 
 ---
 
-## Error Responses
+## 🧠 Natural Language Parsing Approach
 
-### 400 Bad Request
+The search endpoint supports simple rule-based parsing.
 
-* Missing or empty name parameter
+### Example Queries:
+
+| Query               | Interpretation                |
+| ------------------- | ----------------------------- |
+| young males         | gender=male + age 16–24       |
+| females above 30    | gender=female + min_age=30    |
+| people from nigeria | country_id=NG                 |
+| adult males         | gender=male + age_group=adult |
+
+### Rules:
+
+* Keyword-based parsing (no AI used)
+* Case-insensitive matching
+* Multiple filters can be combined
+
+### Error Handling:
+
+If query cannot be interpreted:
 
 ```json
 {
   "status": "error",
-  "message": "Name parameter is required"
+  "message": "Unable to interpret query"
 }
 ```
 
 ---
 
-### 422 Unprocessable Entity
+## 📡 API Endpoints
 
-* No prediction available (gender is null or sample size is 0)
-* Name is not a valid string
+### Profiles
 
-```json
-{
-  "status": "error",
-  "message": "No prediction available for the provided name"
-}
-```
+* `GET /api/profiles/` → List profiles (filter + pagination)
+* `POST /api/profiles` → Create profile (admin only)
+* `GET /api/profiles/{id}/` → Get single profile
+* `DELETE /api/profiles/{id}` → Delete profile (admin only)
 
----
+### Search
 
-### 502 Bad Gateway
+* `GET /api/profiles/search/?q=...`
 
-* External API failure
+### Auth
 
-```json
-{
-  "status": "error",
-  "message": "Failed to reach external service"
-}
-```
+* `POST /api/auth/test-login/`
+* `GET /api/auth/github/`
+* `GET /api/auth/github/callback/`
 
 ---
 
-## Processing Logic
+## 💻 CLI Usage
 
-* Extracts:
+### Setup
 
-  * `gender`
-  * `probability`
-  * `count` → renamed to `sample_size`
-
-* Computes:
-
-  * `is_confident` = true if:
-
-    * probability ≥ 0.7 AND
-    * sample_size ≥ 100
-
-* Generates:
-
-  * `processed_at` → current UTC time in ISO 8601 format
-
----
-
-## Natural Language Parsing
-
-  I implemented a rule-based parser for the /api/profiles/search endpoint.
-
-  The system converts plain English queries into database filters using keyword matching.
-
-## Supported Keywords
-### Gender
-* "male" → gender=male
-* "female" → gender=female
-
-### Age Keywords
-* "young" → age between 16 and 24
-* "child" → age_group=child
-* "teenager" → age_group=teenager
-* "adult" → age_group=adult
-* "senior" → age_group=senior
-
-### Age Conditions
-* "above X" → age >= X
-
-### Country Mapping
-* nigeria → NG
-* kenya → KE
-* ghana → GH
-* angola → AO
-* usa → US
-
-The parser scans the query string and applies filters based on detected keywords.
-
-## Limitations
-* Only supports predefined keywords
-* Does not handle complex grammar
-* Cannot process multiple conditions like “between 20 and 30”
-* Limited country mapping
-* Does not understand synonyms beyond defined rules
-
----
-
-##  Tech Stack
-
-* Python
-* Django
-* Requests library
-
----
-
-## External API
-
-* Genderize.io
-
----
-
-## Setup Instructions (Local Development)
-
-1. Clone the repository:
-
-```
-git clone https://github.com/YOUR_USERNAME/gender-classification-api.git
-cd gender-classification-api
-```
-
-2. Create a virtual environment:
-
-```
-python -m venv venv
-source venv/bin/activate   # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-
-```
+```bash
 pip install -r requirements.txt
 ```
 
-4. Run the server:
+### Run CLI
 
-```
-python manage.py runserver
-```
-
-5. Test the API:
-
-```
-http://127.0.0.1:8000/api/classify?name=john
+```bash
+python main.py
 ```
 
+### Features
 
+* Fetch profiles
+* Create profiles
+* Uses JWT token for authentication
 
-## Notes
+---
 
-* CORS is enabled to allow external access
-* Handles multiple requests efficiently
-* Includes proper error handling and validation
+## 🌐 Web Portal Usage
 
+1. Open the deployed Netlify URL
+2. Enter username and login
+3. Create profiles
+4. Fetch profiles
 
+---
 
-## Author
+## 🧪 Error Handling
 
-Shifawu Bello
+All errors follow this structure:
 
+```json
+{
+  "status": "error",
+  "message": "error description"
+}
+```
+
+---
+
+## ⚙️ Tech Stack
+
+* Django (Backend)
+* PostgreSQL (Database)
+* PyJWT (Authentication)
+* GitHub OAuth
+* HTML + JavaScript (Frontend)
+* Python CLI (Requests)
+* Railway (Backend hosting)
+* Netlify (Frontend hosting)
+
+---
+
+## 📌 Notes
+
+* All timestamps are in UTC (ISO 8601 format)
+* UUID used for profile IDs
+* CORS enabled for all origins
+* System designed to prevent duplicate profiles
