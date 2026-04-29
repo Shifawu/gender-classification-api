@@ -1,21 +1,79 @@
 import json
 import uuid
 import requests
+import jwt
+from datetime import datetime, timedelta
+
 from django.http import JsonResponse
-from .models import Profile
+from django.conf import settings
+from django.shortcuts import redirect
+
+from .models import Profile, User
 
 
 # ======================
 # CORS HELPER
 # ======================
 def cors_response(data, status=200):
-    response = JsonResponse(data, status=status, safe=False)
+    response = JsonResponse(data, status=status)
     response["Access-Control-Allow-Origin"] = "*"
     return response
 
 
 # ======================
-# AGE GROUP LOGIC
+# JWT CONFIG
+# ======================
+SECRET_KEY = settings.SECRET_KEY
+
+
+def generate_access_token(user):
+    payload = {
+        "user_id": str(user.id),
+        "role": user.role,
+        "exp": datetime.utcnow() + timedelta(hours=1),
+        "type": "access"
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+
+def decode_token(token):
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except:
+        return None
+
+
+def get_authenticated_user(request):
+    auth_header = request.headers.get("Authorization")
+
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None, "Unauthorized"
+
+    try:
+        token = auth_header.split(" ")[1]
+        payload = decode_token(token)
+
+        if not payload or payload.get("type") != "access":
+            return None, "Invalid token"
+
+        user = User.objects.get(id=payload["user_id"])
+        return user, None
+
+    except jwt.ExpiredSignatureError:
+        return None, "Token expired"
+    except:
+        return None, "Invalid token"
+
+
+# ======================
+# ROLE CHECK
+# ======================
+def require_admin(user):
+    return user.role == "admin"
+
+
+# ======================
+# AGE GROUP
 # ======================
 def get_age_group(age):
     if age <= 12:
@@ -24,8 +82,7 @@ def get_age_group(age):
         return "teenager"
     elif age <= 59:
         return "adult"
-    else:
-        return "senior"
+    return "senior"
 
 
 # ======================
@@ -47,9 +104,93 @@ def serialize_profile(p):
 
 
 # ======================
+# OAUTH (GITHUB)
+# ======================
+def github_login(request):
+    url = (
+        "https://github.com/login/oauth/authorize"
+        f"?client_id={settings.GITHUB_CLIENT_ID}&scope=read:user"
+    )
+    return redirect(url)
+
+
+def github_callback(request):
+    code = request.GET.get("code")
+
+    if not code:
+        return cors_response({"status": "error", "message": "No code provided"}, 400)
+
+    token_res = requests.post(
+        "https://github.com/login/oauth/access_token",
+        headers={"Accept": "application/json"},
+        data={
+            "client_id": settings.GITHUB_CLIENT_ID,
+            "client_secret": settings.GITHUB_CLIENT_SECRET,
+            "code": code,
+        }
+    ).json()
+
+    access_token = token_res.get("access_token")
+
+    if not access_token:
+        return cors_response({"status": "error", "message": "Failed to get access token"}, 400)
+
+    user_res = requests.get(
+        "https://api.github.com/user",
+        headers={"Authorization": f"Bearer {access_token}"}
+    ).json()
+
+    username = user_res.get("login")
+
+    if not username:
+        return cors_response({"status": "error", "message": "Failed to fetch user"}, 400)
+
+    user, _ = User.objects.get_or_create(
+        username=username,
+        defaults={"role": "analyst"}
+    )
+
+    return cors_response({
+        "status": "success",
+        "access_token": generate_access_token(user)
+    })
+
+
+# ======================
+# TEST LOGIN
+# ======================
+def test_login(request):
+    if request.method != "POST":
+        return cors_response({"status": "error", "message": "Method not allowed"}, 405)
+
+    try:
+        body = json.loads(request.body)
+        username = body.get("username")
+    except:
+        return cors_response({"status": "error", "message": "Invalid JSON"}, 422)
+
+    user = User.objects.filter(username=username).first()
+
+    if not user:
+        return cors_response({"status": "error", "message": "User not found"}, 404)
+
+    return cors_response({
+        "status": "success",
+        "access_token": generate_access_token(user)
+    })
+
+
+# ======================
 # CREATE PROFILE
 # ======================
 def create_profile(request):
+    user, error = get_authenticated_user(request)
+    if error:
+        return cors_response({"status": "error", "message": error}, 401)
+
+    if not require_admin(user):
+        return cors_response({"status": "error", "message": "Forbidden"}, 403)
+
     if request.method != "POST":
         return cors_response({"status": "error", "message": "Method not allowed"}, 405)
 
@@ -57,9 +198,8 @@ def create_profile(request):
         body = json.loads(request.body)
         name = body.get("name")
 
-        if not name or not isinstance(name, str):
-            return cors_response({"status": "error", "message": "Missing or invalid name"}, 400)
-
+        if not name:
+            return cors_response({"status": "error", "message": "Missing name"}, 400)
     except:
         return cors_response({"status": "error", "message": "Invalid JSON"}, 422)
 
@@ -69,98 +209,82 @@ def create_profile(request):
             "status": "success",
             "message": "Profile already exists",
             "data": serialize_profile(existing)
-        }, 200)
+        })
 
-    try:
-        gender_res = requests.get(f"https://api.genderize.io?name={name}").json()
-        age_res = requests.get(f"https://api.agify.io?name={name}").json()
-        nation_res = requests.get(f"https://api.nationalize.io?name={name}").json()
-    except:
-        return cors_response({"status": "error", "message": "Upstream failure"}, 502)
+    g = requests.get(f"https://api.genderize.io?name={name}").json()
+    a = requests.get(f"https://api.agify.io?name={name}").json()
+    n = requests.get(f"https://api.nationalize.io?name={name}").json()
 
-    if gender_res.get("gender") is None or gender_res.get("count") == 0:
+    if g.get("gender") is None or g.get("count") == 0:
         return cors_response({"status": "error", "message": "Genderize returned an invalid response"}, 502)
 
-    if age_res.get("age") is None:
+    if a.get("age") is None:
         return cors_response({"status": "error", "message": "Agify returned an invalid response"}, 502)
 
-    countries = nation_res.get("country")
-    if not countries:
+    if not n.get("country"):
         return cors_response({"status": "error", "message": "Nationalize returned an invalid response"}, 502)
 
-    top_country = max(countries, key=lambda x: x["probability"])
+    top = max(n["country"], key=lambda x: x["probability"])
 
     profile = Profile.objects.create(
         id=uuid.uuid4(),
         name=name.lower(),
-        gender=gender_res["gender"],
-        gender_probability=gender_res["probability"],
-        age=age_res["age"],
-        age_group=get_age_group(age_res["age"]),
-        country_id=top_country["country_id"],
-        country_name=top_country["country_id"],
-        country_probability=top_country["probability"]
+        gender=g["gender"],
+        gender_probability=g["probability"],
+        age=a["age"],
+        age_group=get_age_group(a["age"]),
+        country_id=top["country_id"],
+        country_name=top["country_id"],
+        country_probability=top["probability"]
     )
 
-    return cors_response({
-        "status": "success",
-        "data": serialize_profile(profile)
-    }, 201)
+    return cors_response({"status": "success", "data": serialize_profile(profile)}, 201)
 
 
 # ======================
 # GET ALL (FILTER + SORT + PAGINATION)
 # ======================
 def get_all_profiles(request):
+    user, error = get_authenticated_user(request)
+    if error:
+        return cors_response({"status": "error", "message": error}, 401)
+
     if request.method != "GET":
         return cors_response({"status": "error", "message": "Method not allowed"}, 405)
 
     profiles = Profile.objects.all()
 
     try:
-        # Filters
-        gender = request.GET.get("gender")
-        age_group = request.GET.get("age_group")
-        country_id = request.GET.get("country_id")
+        # FILTERS
+        if request.GET.get("gender"):
+            profiles = profiles.filter(gender__iexact=request.GET["gender"])
 
-        min_age = request.GET.get("min_age")
-        max_age = request.GET.get("max_age")
-        min_gender_prob = request.GET.get("min_gender_probability")
-        min_country_prob = request.GET.get("min_country_probability")
+        if request.GET.get("age_group"):
+            profiles = profiles.filter(age_group__iexact=request.GET["age_group"])
 
-        if gender:
-            profiles = profiles.filter(gender__iexact=gender)
+        if request.GET.get("country_id"):
+            profiles = profiles.filter(country_id__iexact=request.GET["country_id"])
 
-        if age_group:
-            profiles = profiles.filter(age_group__iexact=age_group)
+        if request.GET.get("min_age"):
+            profiles = profiles.filter(age__gte=int(request.GET["min_age"]))
 
-        if country_id:
-            profiles = profiles.filter(country_id__iexact=country_id)
+        if request.GET.get("max_age"):
+            profiles = profiles.filter(age__lte=int(request.GET["max_age"]))
 
-        if min_age:
-            if not min_age.isdigit():
-                raise ValueError
-            profiles = profiles.filter(age__gte=int(min_age))
+        if request.GET.get("min_gender_probability"):
+            profiles = profiles.filter(gender_probability__gte=float(request.GET["min_gender_probability"]))
 
-        if max_age:
-            if not max_age.isdigit():
-                raise ValueError
-            profiles = profiles.filter(age__lte=int(max_age))
+        if request.GET.get("min_country_probability"):
+            profiles = profiles.filter(country_probability__gte=float(request.GET["min_country_probability"]))
 
-        if min_gender_prob:
-            profiles = profiles.filter(gender_probability__gte=float(min_gender_prob))
-
-        if min_country_prob:
-            profiles = profiles.filter(country_probability__gte=float(min_country_prob))
-
-        # Sorting
+        # SORT
         sort_by = request.GET.get("sort_by")
         order = request.GET.get("order", "asc")
 
-        valid_sort_fields = ["age", "created_at", "gender_probability"]
+        allowed = ["age", "created_at", "gender_probability"]
 
         if sort_by:
-            if sort_by not in valid_sort_fields or order not in ["asc", "desc"]:
+            if sort_by not in allowed:
                 return cors_response({"status": "error", "message": "Invalid query parameters"}, 422)
 
             if order == "desc":
@@ -168,12 +292,9 @@ def get_all_profiles(request):
 
             profiles = profiles.order_by(sort_by)
 
-        # Pagination
+        # PAGINATION
         page = int(request.GET.get("page", 1))
         limit = min(int(request.GET.get("limit", 10)), 50)
-
-        if page < 1:
-            return cors_response({"status": "error", "message": "Invalid query parameters"}, 422)
 
         start = (page - 1) * limit
         end = start + limit
@@ -184,51 +305,42 @@ def get_all_profiles(request):
     except:
         return cors_response({"status": "error", "message": "Invalid query parameters"}, 422)
 
-    data = [serialize_profile(p) for p in profiles]
-
     return cors_response({
         "status": "success",
         "page": page,
         "limit": limit,
         "total": total,
-        "data": data
+        "data": [serialize_profile(p) for p in profiles]
     })
-
-
-# ======================
-# HANDLER
-# ======================
-def profiles_handler(request):
-    if request.method == "POST":
-        return create_profile(request)
-    elif request.method == "GET":
-        return get_all_profiles(request)
-
-    return cors_response({"status": "error", "message": "Method not allowed"}, 405)
 
 
 # ======================
 # GET SINGLE
 # ======================
 def get_profile(request, id):
-    if request.method != "GET":
-        return cors_response({"status": "error", "message": "Method not allowed"}, 405)
+    user, error = get_authenticated_user(request)
+    if error:
+        return cors_response({"status": "error", "message": error}, 401)
 
     try:
         profile = Profile.objects.get(id=id)
     except Profile.DoesNotExist:
         return cors_response({"status": "error", "message": "Profile not found"}, 404)
 
-    return cors_response({
-        "status": "success",
-        "data": serialize_profile(profile)
-    })
+    return cors_response({"status": "success", "data": serialize_profile(profile)})
 
 
 # ======================
 # DELETE
 # ======================
 def delete_profile(request, id):
+    user, error = get_authenticated_user(request)
+    if error:
+        return cors_response({"status": "error", "message": error}, 401)
+
+    if not require_admin(user):
+        return cors_response({"status": "error", "message": "Forbidden"}, 403)
+
     if request.method != "DELETE":
         return cors_response({"status": "error", "message": "Method not allowed"}, 405)
 
@@ -241,97 +353,63 @@ def delete_profile(request, id):
 
 
 # ======================
-# NATURAL LANGUAGE SEARCH
+# SEARCH (FIXED)
 # ======================
 def search_profiles(request):
-    if request.method != "GET":
-        return cors_response({"status": "error", "message": "Method not allowed"}, 405)
+    user, error = get_authenticated_user(request)
+    if error:
+        return cors_response({"status": "error", "message": error}, 401)
 
     query = request.GET.get("q")
+
     if not query:
         return cors_response({"status": "error", "message": "Missing query"}, 400)
 
     query = query.lower()
     profiles = Profile.objects.all()
+    applied = False
 
     try:
-        matched = False
-
         if "male" in query:
             profiles = profiles.filter(gender="male")
-            matched = True
+            applied = True
 
         if "female" in query:
             profiles = profiles.filter(gender="female")
-            matched = True
+            applied = True
 
         if "young" in query:
             profiles = profiles.filter(age__gte=16, age__lte=24)
-            matched = True
+            applied = True
 
         if "adult" in query:
             profiles = profiles.filter(age_group="adult")
-            matched = True
-
-        if "teenager" in query:
-            profiles = profiles.filter(age_group="teenager")
-            matched = True
-
-        if "child" in query:
-            profiles = profiles.filter(age_group="child")
-            matched = True
-
-        if "senior" in query:
-            profiles = profiles.filter(age_group="senior")
-            matched = True
-
-        if "above" in query:
-            parts = query.split()
-            for i, word in enumerate(parts):
-                if word == "above":
-                    if i + 1 < len(parts) and parts[i + 1].isdigit():
-                        profiles = profiles.filter(age__gte=int(parts[i + 1]))
-                        matched = True
-                    else:
-                        raise ValueError
-
-        country_map = {
-            "nigeria": "NG",
-            "kenya": "KE",
-            "ghana": "GH",
-            "angola": "AO",
-            "usa": "US"
-        }
-
-        for name, code in country_map.items():
-            if name in query:
-                profiles = profiles.filter(country_id=code)
-                matched = True
-
-        if not matched:
-            return cors_response({"status": "error", "message": "Unable to interpret query"}, 400)
+            applied = True
 
     except:
-        return cors_response({"status": "error", "message": "Unable to interpret query"}, 400)
+        return cors_response({"status": "error", "message": "Unable to interpret query"}, 422)
 
-    page = int(request.GET.get("page", 1))
-    limit = min(int(request.GET.get("limit", 10)), 50)
-
-    start = (page - 1) * limit
-    end = start + limit
-
-    total = profiles.count()
-    profiles = profiles[start:end]
-
-    data = [serialize_profile(p) for p in profiles]
+    if not applied:
+        return cors_response({"status": "error", "message": "Unable to interpret query"}, 422)
 
     return cors_response({
         "status": "success",
-        "page": page,
-        "limit": limit,
-        "total": total,
-        "data": data
+        "page": 1,
+        "limit": profiles.count(),
+        "total": profiles.count(),
+        "data": [serialize_profile(p) for p in profiles]
     })
+
+# ======================
+# HANDLER
+# ======================
+# def profiles_handler(request):
+#     if request.method == "POST":
+#         return create_profile(request)
+#     elif request.method == "GET":
+#         return get_all_profiles(request)
+
+#     return cors_response({"status": "error", "message": "Method not allowed"}, 405)
 
 from django.core.management import call_command
 
