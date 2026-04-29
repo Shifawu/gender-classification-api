@@ -15,8 +15,12 @@ urlpatterns = [
     path("profiles/<uuid:id>", get_profile),
     path("profiles/<uuid:id>", delete_profile),
 
-    path("auth/test-login", test_login),
+    # path("auth/test-login", test_login),
 
     path("auth/github", github_login),
     path("auth/github/callback", github_callback),
+
+    path("auth/refresh", refresh_token_view),
+    path("auth/logout", logout_view),
+    path("users/me", get_current_user),
 ]
