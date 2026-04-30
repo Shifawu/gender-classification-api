@@ -13,6 +13,11 @@ from django.conf import settings
 
 from .models import Profile, User
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.permissions import AllowAny
+from rest_framework.decorators import api_view, permission_classes
+
 
 SECRET_KEY = settings.SECRET_KEY
 REQUEST_LOG = {}
@@ -52,30 +57,24 @@ def generate_refresh_token(user):
 # ======================
 # AUTH HELPER
 # ======================
-def get_authenticated_user(request):
-    auth_header = request.headers.get("Authorization")
 
-    if not auth_header:
-        return None, "Authorization header missing"
+def get_authenticated_user(request):
+    jwt_auth = JWTAuthentication()
 
     try:
-        token = auth_header.split(" ")[1]
-        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        user_auth_tuple = jwt_auth.authenticate(request)
+        if user_auth_tuple is None:
+            return None, "Authentication credentials were not provided"
 
-        if payload.get("type") != "access":
-            return None, "Invalid token type"
-
-        user = User.objects.get(id=payload["user_id"])
+        user, token = user_auth_tuple
 
         if not user.is_active:
             return None, "User inactive"
 
         return user, None
 
-    except jwt.ExpiredSignatureError:
-        return None, "Token expired"
-    except:
-        return None, "Invalid token"
+    except AuthenticationFailed as e:
+        return None, str(e)
 
 
 # ======================
@@ -108,6 +107,8 @@ def get_age_group(age):
 # ======================
 # GITHUB LOGIN (RATE LIMITED)
 # ======================
+@api_view(["GET"])
+@permission_classes([AllowAny])
 def github_login(request):
     ip = request.META.get("REMOTE_ADDR")
     now = time()
@@ -133,6 +134,8 @@ def github_login(request):
 # ======================
 # GITHUB CALLBACK
 # ======================
+@api_view(["GET"])
+@permission_classes([AllowAny])
 def github_callback(request):
     code = request.GET.get("code")
 
@@ -178,9 +181,16 @@ def github_callback(request):
             "client_secret": settings.GITHUB_CLIENT_SECRET,
             "code": code,
         }
-    ).json()
+    )
 
-    github_access_token = token_response.get("access_token")
+    data = token_response.json()
+    if "error" in data:
+        return cors_response({
+            "error": "GitHub OAuth failed",
+            "details": data
+        }, 400)
+
+    github_access_token = data.get("access_token")
 
     if not github_access_token:
         return cors_response({"error": "Failed to get GitHub token"}, 400)
@@ -215,6 +225,8 @@ def github_callback(request):
 # ======================
 # REFRESH TOKEN
 # ======================
+@api_view(["POST"])
+@permission_classes([AllowAny])
 def refresh_token_view(request):
     if request.method != "POST":
         return cors_response({"error": "Method not allowed"}, 405)
@@ -394,7 +406,7 @@ def get_profile(request, id):
 
     user, error = get_authenticated_user(request)
     if error:
-        return cors_response({"status": "error", "message": error}, 401)
+        return cors_response({"error": error}, 401)
 
     try:
         p = Profile.objects.get(id=id)
@@ -411,10 +423,10 @@ def delete_profile(request, id):
 
     user, error = get_authenticated_user(request)
     if error:
-        return cors_response({"status": "error", "message": error}, 401)
+        return cors_response({"error": error}, 401)
 
     if not require_admin(user):
-        return cors_response({"status": "error", "message": "Admins only"}, 403)
+        return cors_response({"error": "Admins only"}, 403)
 
     try:
         Profile.objects.get(id=id).delete()
@@ -431,7 +443,7 @@ def search_profiles(request):
 
     user, error = get_authenticated_user(request)
     if error:
-        return cors_response({"status": "error", "message": error}, 401)
+        return cors_response({"error": error}, 401)
 
     query = request.GET.get("q", "").lower()
     profiles = Profile.objects.all()
