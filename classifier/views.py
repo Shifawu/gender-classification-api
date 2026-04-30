@@ -59,22 +59,29 @@ def generate_refresh_token(user):
 # ======================
 
 def get_authenticated_user(request):
-    jwt_auth = JWTAuthentication()
+    auth_header = request.headers.get("Authorization")
+
+    if not auth_header:
+        return None, "Authorization header missing"
 
     try:
-        user_auth_tuple = jwt_auth.authenticate(request)
-        if user_auth_tuple is None:
-            return None, "Authentication credentials were not provided"
+        token = auth_header.split(" ")[1]
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
 
-        user, token = user_auth_tuple
+        if payload.get("type") != "access":
+            return None, "Invalid token type"
+
+        user = User.objects.get(id=payload["user_id"])
 
         if not user.is_active:
             return None, "User inactive"
 
         return user, None
 
-    except AuthenticationFailed as e:
-        return None, str(e)
+    except jwt.ExpiredSignatureError:
+        return None, "Token expired"
+    except:
+        return None, "Invalid token"
 
 
 # ======================
@@ -119,7 +126,7 @@ def github_login(request):
     REQUEST_LOG[ip] = [t for t in REQUEST_LOG[ip] if now - t < 60]
 
     if len(REQUEST_LOG[ip]) >= 10:
-        return cors_response({"status": "error", "message": "Too many requests"}, 429)
+        return cors_response({"error": "Too many requests"}, 429)
 
     REQUEST_LOG[ip].append(now)
 
@@ -156,7 +163,7 @@ def github_callback(request):
         )
 
         # create analyst user
-        User.objects.get_or_create(
+        analyst_user, _ = User.objects.get_or_create(
             github_id="test_analyst_id",
             defaults={
                 "username": "analyst_test",
@@ -167,8 +174,13 @@ def github_callback(request):
 
         return cors_response({
             "access_token": generate_access_token(admin_user),
-            "refresh_token": generate_refresh_token(admin_user)
+            "refresh_token": generate_refresh_token(admin_user),
+            "access_token": generate_access_token(analyst_user),
+            "refresh_token": generate_refresh_token(analyst_user)
+            
         })
+    
+    
 
     # ======================
     # NORMAL GITHUB FLOW
@@ -243,7 +255,8 @@ def refresh_token_view(request):
         user = User.objects.get(id=payload["user_id"])
 
         return cors_response({
-            "access_token": generate_access_token(user)
+            "access_token": generate_access_token(user),
+            "refresh_token": generate_refresh_token(user)  # IMPORTANT FIX
         })
 
     except jwt.ExpiredSignatureError:
