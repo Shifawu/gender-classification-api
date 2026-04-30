@@ -11,3 +11,5 @@ sqlparse==0.5.5
 tzdata==2025.3
 urllib3==2.6.3
 PyJWT==2.8.0
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
