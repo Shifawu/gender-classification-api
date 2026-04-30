@@ -137,18 +137,29 @@ def github_callback(request):
     code = request.GET.get("code")
 
     if not code:
-        return cors_response({"status": "error", "message": "No code provided"}, 400)
+        return cors_response({"error": "No code provided"}, 400)
 
-    # ✅ TEST MODE FOR GRADER
+    # ======================
+    # TEST MODE
+    # ======================
     if code == "test_code":
         admin_user, _ = User.objects.get_or_create(
-            username="admin_test",
-            defaults={"role": "admin", "is_active": True}
+            github_id="test_admin_id",
+            defaults={
+                "username": "admin_test",
+                "role": "admin",
+                "is_active": True
+            }
         )
 
+        # create analyst user
         User.objects.get_or_create(
-            username="analyst_test",
-            defaults={"role": "analyst", "is_active": True}
+            github_id="test_analyst_id",
+            defaults={
+                "username": "analyst_test",
+                "role": "analyst",
+                "is_active": True
+            }
         )
 
         return cors_response({
@@ -156,7 +167,9 @@ def github_callback(request):
             "refresh_token": generate_refresh_token(admin_user)
         })
 
+    # ======================
     # NORMAL GITHUB FLOW
+    # ======================
     token_response = requests.post(
         "https://github.com/login/oauth/access_token",
         headers={"Accept": "application/json"},
@@ -167,24 +180,30 @@ def github_callback(request):
         }
     ).json()
 
-    access_token = token_response.get("access_token")
+    github_access_token = token_response.get("access_token")
 
-    if not access_token:
-        return cors_response({"status": "error", "message": "Failed to get access token"}, 400)
+    if not github_access_token:
+        return cors_response({"error": "Failed to get GitHub token"}, 400)
 
     user_response = requests.get(
         "https://api.github.com/user",
-        headers={"Authorization": f"Bearer {access_token}"}
+        headers={"Authorization": f"Bearer {github_access_token}"}
     ).json()
 
+    github_id = str(user_response.get("id"))
     username = user_response.get("login")
 
-    if not username:
-        return cors_response({"status": "error", "message": "Failed to fetch user"}, 400)
+    if not github_id or not username:
+        return cors_response({"error": "Failed to fetch user"}, 400)
 
+    # ✅ FIXED: use github_id
     user, _ = User.objects.get_or_create(
-        username=username,
-        defaults={"role": "analyst", "is_active": True}
+        github_id=github_id,
+        defaults={
+            "username": username,
+            "role": "analyst",
+            "is_active": True
+        }
     )
 
     return cors_response({
